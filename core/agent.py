@@ -201,6 +201,139 @@ class Agent:
             iterations=self.max_iterations,
         )
 
+    def run_stream(self, user_input: str):
+        """ReAct 循环流式版 — 逐事件 yield，供上层实时消费"""
+        from .tools import ToolRegistry
+
+        trace: list[dict] = []
+        total_usage: dict[str, int] = {}
+        messages = [{"role": "system", "content": self.system_prompt}]
+        messages.extend(self.memory.get_context())
+        messages.append({"role": "user", "content": user_input})
+
+        for iteration in range(self.max_iterations):
+            yield {"type": "iteration_start", "iteration": iteration}
+
+            # 流式累积
+            thought_parts: list[str] = []
+            tool_calls_buffer: dict[int, dict] = {}  # index → 累积的 tool_call 片段
+
+            for chunk in self.llm.chat_stream(
+                messages, tools=ToolRegistry.schemas()
+            ):
+                if chunk.content:
+                    thought_parts.append(chunk.content)
+                    yield {"type": "thought_chunk", "text": chunk.content}
+
+                if chunk.tool_call_id:
+                    idx = 0  # 简化：同一轮只有一个 tool call
+                    if idx not in tool_calls_buffer:
+                        tool_calls_buffer[idx] = {
+                            "id": chunk.tool_call_id,
+                            "name": chunk.tool_name,
+                            "arguments": "",
+                        }
+                    if chunk.tool_name:
+                        tool_calls_buffer[idx]["name"] = chunk.tool_name
+                    tool_calls_buffer[idx]["arguments"] += chunk.tool_args
+
+                if chunk.usage:
+                    self._accumulate_usage(total_usage, chunk.usage)
+
+                if chunk.finish_reason == "stop":
+                    break
+                elif chunk.finish_reason == "tool_calls":
+                    break
+
+            thought = "".join(thought_parts)
+
+            # 情况 1：有工具调用
+            if tool_calls_buffer:
+                for tc_data in tool_calls_buffer.values():
+                    try:
+                        arguments = json.loads(tc_data["arguments"])
+                    except (json.JSONDecodeError, KeyError):
+                        arguments = {}
+
+                    tool = ToolRegistry.get(tc_data["name"])
+                    if not tool:
+                        obs = f"错误: 未找到工具 '{tc_data['name']}'"
+                    else:
+                        obs = tool.execute(**arguments)
+
+                    yield {
+                        "type": "tool_call",
+                        "name": tc_data["name"],
+                        "arguments": arguments,
+                    }
+                    yield {"type": "observation", "text": obs}
+
+                    trace.append({
+                        "iteration": iteration,
+                        "thought": thought,
+                        "tool": tc_data["name"],
+                        "arguments": arguments,
+                        "observation": obs,
+                    })
+                    self._call_hook("on_tool_call", trace[-1])
+
+                    messages.append({
+                        "role": "assistant",
+                        "content": thought,
+                        "tool_calls": [{
+                            "id": tc_data["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc_data["name"],
+                                "arguments": json.dumps(arguments),
+                            },
+                        }],
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_data["id"],
+                        "content": obs,
+                    })
+                continue
+
+            # 情况 2：文本回复 → 最终答案
+            if thought:
+                if "[FINAL]" in thought or iteration == self.max_iterations - 1:
+                    clean = thought.replace("[FINAL]", "").replace("Final Answer:", "").strip()
+                    yield {"type": "final_answer", "text": clean}
+                    trace.append({
+                        "iteration": iteration,
+                        "thought": thought,
+                        "final_answer": clean,
+                    })
+                    self._call_hook("on_final", trace[-1])
+                    yield {
+                        "type": "done",
+                        "content": clean,
+                        "trace": trace,
+                        "usage": total_usage,
+                        "iterations": iteration + 1,
+                    }
+                    return
+
+                if iteration < self.max_iterations - 1:
+                    messages.append({"role": "assistant", "content": thought})
+                    continue
+
+            if not thought:
+                messages.append({
+                    "role": "assistant",
+                    "content": "（空响应，请继续）",
+                })
+
+        yield {
+            "type": "done",
+            "content": "（已达最大迭代次数，未能得出最终答案）",
+            "trace": trace,
+            "usage": total_usage,
+            "iterations": self.max_iterations,
+        }
+
     # ── 内部方法 ────────────────────────────────────────
 
     def _format_tool_descriptions(self) -> str:
