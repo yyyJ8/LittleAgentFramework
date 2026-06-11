@@ -1,7 +1,7 @@
 """
 多步推理 Demo — 展示 ReAct Agent 的核心能力。
 
-运行前请设置环境变量:
+运行前请在 .env 文件中配置:
   DEEPSEEK_API_KEY=your_api_key_here
 """
 
@@ -10,8 +10,13 @@ from __future__ import annotations
 import os
 import sys
 
+from dotenv import load_dotenv
+
 # 将项目根目录加入路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+# 加载 .env 文件
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from core.llm import LLM, LLMConfig
 from core.tools import tool

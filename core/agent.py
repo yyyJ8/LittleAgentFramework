@@ -220,7 +220,8 @@ class Agent:
 
     def _accumulate_usage(self, total: dict, current: dict) -> None:
         for key, val in current.items():
-            total[key] = total.get(key, 0) + val
+            if isinstance(val, int):
+                total[key] = total.get(key, 0) + val
 
     def _call_hook(self, name: str, data: dict) -> None:
         hook = self.hooks.get(name)

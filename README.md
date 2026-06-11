@@ -99,8 +99,3 @@ def run(self, user_input: str) -> AgentResult:
 - **异常安全执行** — 工具调用出错返回错误信息而非崩溃
 - **完整 Trace** — 每次运行记录 thought → action → observation 轨迹，可审计可调试
 
-## 面试价值
-
-这个项目是为了展示你能看清 Agent 的底层：
-
-> "一个 Agent 本质就是一个循环——LLM 思考、决定调什么工具、拿到结果、再思考。LangGraph、AutoGen 那些框架只是在上面加了一层编排和状态管理。理解了这个核心，用哪个框架都能快速上手。"
