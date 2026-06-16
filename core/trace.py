@@ -498,6 +498,8 @@ def export_trace(result: Any, path: str, *, question: str = "", title: str = "")
         result = agent.run("...")
         export_trace(result, "output/trace.html", question="...")
     """
+    import os as _os
+    _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
     html = render_html(result, question=question, title=title or "Agent Trace")
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
@@ -505,6 +507,8 @@ def export_trace(result: Any, path: str, *, question: str = "", title: str = "")
 
 def export_debate(result: Any, path: str, *, question: str = "", title: str = "") -> None:
     """便捷函数：直接导出辩论结果为 HTML 文件。"""
+    import os as _os
+    _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
     html = debate_to_html(result, question=question, title=title or "Debate Trace")
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)

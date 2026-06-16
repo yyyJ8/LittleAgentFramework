@@ -1,113 +1,218 @@
 # mini_agent_core
 
-从零手写 Agent 核心循环，展示对 Agent 底层原理的理解。
+**从零手写的轻量级 Agent 框架**，~500 行核心代码，不依赖任何 LLM 框架。
+
+> 核心是一个 ReAct 循环，外加流式输出、多 Agent 辩论、Trace 可视化。看清 Agent 本质的最小可运行代码。
 
 ---
 
-## 是什么
+## 目录
 
-一个轻量级的 Agent 核心库，约 400 行 Python，核心是一个 ReAct 循环。
+- [快速开始](#快速开始)
+- [项目结构](#项目结构)
+- [核心模块](#核心模块)
+- [运行 Demo](#运行-demo)
+- [API 使用](#api-使用)
+- [特性](#特性)
+- [测试](#测试)
 
-**不是框架。** 它是让你看清 Agent 本质的最小可运行代码——没有 IoC 容器、没有配置驱动引擎、没有花哨的编排抽象。就是 tool calling + 循环 + 记忆。
+---
 
-## 结构
+## 快速开始
+
+```bash
+# 1. 安装依赖
+pip install -r requirements.txt
+
+# 2. 配置 API Key
+cp .env.example .env
+# 编辑 .env，填入 DEEPSEEK_API_KEY=sk-你的key
+
+# 3. 跑起来
+python demo/reasoning.py        # 基础推理
+python demo/reasoning_stream.py # 流式打字机
+python demo/chat.py             # 交互式对话
+```
+
+---
+
+## 项目结构
 
 ```
 mini_agent_core/
-├── core/
-│   ├── __init__.py      # 统一导出
-│   ├── llm.py           # httpx 直调 LLM API + 流式 SSE
-│   ├── tools.py         # @tool 装饰器 + 自动 JSON Schema
-│   ├── memory.py        # 短期滑动窗口 + 长期向量检索
-│   ├── agent.py         # ReAct 循环 + 流式推理
-│   ├── debate.py        # 多 Agent 辩论编排
-│   └── trace.py         # Trace → HTML 可视化导出
-├── demo/
-│   ├── reasoning.py           # 多步推理演示
-│   ├── reasoning_stream.py    # 流式打字机效果
-│   ├── debate_demo.py         # 三 Agent 辩论
-│   └── export_demo.py         # 导出交互式 HTML 报告
-├── tests/
-│   ├── test_agent.py
-│   ├── test_llm.py
-│   ├── test_memory.py
-│   └── test_tools.py
-└── requirements.txt
+├── core/                        # 框架核心（~500 行）
+│   ├── llm.py                   # LLM 调用层（同步 + 流式 SSE）
+│   ├── tools.py                 # 工具注册 + 自动 JSON Schema
+│   ├── agent.py                 # ReAct 循环引擎
+│   ├── memory.py                # 短期记忆 + 长期记忆
+│   ├── debate.py                # 多 Agent 辩论编排
+│   └── trace.py                 # Trace → HTML 可视化导出
+│
+├── demo/                        # 演示入口
+│   ├── reasoning.py             # 基础多步推理
+│   ├── reasoning_stream.py      # 流式推理
+│   ├── chat.py                  # 交互式 CLI 对话
+│   ├── debate_demo.py           # 三 Agent 辩论
+│   └── export_demo.py           # 导出 HTML 报告
+│
+├── tests/                       # 35 个单元测试
+├── output/                      # 生成的 HTML 报告（gitignore）
+├── .env.example                 # 环境变量模板
+└── requirements.txt             # 4 个依赖
 ```
 
-## 安装
+---
 
-```bash
-pip install -r requirements.txt
-cp .env.example .env   # 编辑 .env 填入 DEEPSEEK_API_KEY
-```
+## 核心模块
 
-## 快速使用
+### llm.py — LLM 调用层
+
+用 `httpx` 直调 DeepSeek API，不套 OpenAI SDK。展示对 HTTP 协议和 function calling 协议的底层理解。
 
 ```python
-from core import LLM, LLMConfig, Agent
-from core.tools import tool
+from core.llm import LLM, LLMConfig
 
-# 1. 定义工具
-@tool(description="计算数学表达式")
-def calculate(expression: str) -> float:
-    return eval(expression)
+llm = LLM(LLMConfig(api_key="sk-xxx", model="deepseek-chat"))
 
-# 2. 创建 Agent
-llm = LLM(LLMConfig(api_key="your-key"))
-agent = Agent(llm=llm, tools=[calculate])
+# 同步调用
+response = llm.chat([{"role": "user", "content": "1+1=?"}])
+print(response.content)  # "2"
 
-# 3. 运行
-result = agent.run("计算 (3+5)*2")
-print(result.content)   # → 16
-print(result.trace)     # → 完整推理轨迹
+# 流式调用
+for chunk in llm.chat_stream([...]):
+    print(chunk.content, end="", flush=True)  # 逐字输出
 ```
 
-## 运行演示
+### tools.py — 工具注册系统
+
+装饰器模式 + 类型反射，从函数签名自动推断 JSON Schema，无需手写参数定义。
+
+```python
+from core.tools import tool
+
+@tool(description="计算数学表达式")
+def calculate(expression: str) -> float:
+    """计算数学表达式
+
+    Args:
+        expression: 数学表达式字符串
+    """
+    return eval(expression)
+```
+
+自动生成 LLM function calling 所需的完整 JSON Schema。
+
+### agent.py — ReAct 循环引擎
+
+整个框架的核心。一个 `for` 循环实现完整的 Reasoning + Acting：
+
+```
+User 输入 → Thought → Action(调工具) → Observation → Thought → ... → Final Answer
+```
+
+```python
+from core.agent import Agent
+
+agent = Agent(llm=llm, tools=[calculate, search], max_iterations=10)
+result = agent.run("光从太阳到地球要多久？")
+
+print(result.content)    # 最终答案
+print(result.trace)      # 完整推理轨迹
+print(result.usage)      # Token 用量
+```
+
+**每轮 LLM 返回两种结果：要么要求调工具 → 执行后继续循环；要么给出最终答案 → 结束。** 核心逻辑 ~30 行。
+
+### memory.py — 记忆系统
+
+| 类 | 存储 | 特点 |
+|----|------|------|
+| `SlidingWindowMemory` | 最近 N 条对话 | 内存，窗口满自动丢弃 |
+| `LongTermMemory` | ChromaDB 向量库 | 落磁盘，跨对话语义检索 |
+
+### debate.py — 多 Agent 辩论
+
+外挂在 ReAct 上的编排层：多个 Agent 共享上下文，轮流发言，互相质疑。
+
+```
+Solver(求解) → Critic(挑刺) → Judge(裁决) → 最终答案
+```
+
+```python
+from core.debate import Debate
+
+debate = Debate(solver=agent_a, critic=agent_b, judge=agent_c)
+result = debate.run("地球绕太阳的线速度是多少？")
+```
+
+### trace.py — 可视化导出
+
+将推理轨迹渲染为自包含 HTML 页面，双击即开，支持折叠/展开、token 统计。
+
+```python
+from core.trace import export_trace
+
+export_trace(result, "output/trace.html", question="...")
+```
+
+---
+
+## 运行 Demo
 
 ```bash
-# 基础推理
+# 基础多步推理
 python demo/reasoning.py
 
 # 流式打字机效果
 python demo/reasoning_stream.py
 
-# 多 Agent 辩论
+# 交互式 CLI（支持 /trace /export /clear /exit）
+python demo/chat.py
+
+# 三 Agent 辩论
 python demo/debate_demo.py
 
-# 导出交互式 HTML 报告
+# 导出 HTML 报告
 python demo/export_demo.py           # Agent trace
 python demo/export_demo.py debate    # Debate trace
 ```
 
-## 测试
+---
 
-```bash
-pytest tests/ -v          # 35 tests
-```
-
-## 核心逻辑
-
-ReAct 循环核心约 30 行：
+## API 使用
 
 ```python
-def run(self, user_input: str) -> AgentResult:
-    messages = self._build_context(user_input)
+from core.llm import LLM, LLMConfig
+from core.tools import tool
+from core.agent import Agent
 
-    for i in range(self.max_iterations):
-        response = self.llm.chat(messages, tools=ToolRegistry.schemas())
+# 定义工具
+@tool(description="计算数学表达式")
+def calculate(expression: str) -> float:
+    return eval(expression)
 
-        if response.tool_calls:
-            for tc in response.tool_calls:
-                obs = tool.execute(**tc.arguments)
-                messages.append({"role": "tool", ...})
-            continue
+@tool(description="搜索知识库")
+def search(query: str) -> str:
+    knowledge = {"光速": "3×10⁸ m/s", ...}
+    return knowledge.get(query, "未找到")
 
-        if response.content:
-            return AgentResult(content=response.content)
+# 创建 Agent
+llm = LLM(LLMConfig(api_key="sk-xxx"))
+agent = Agent(llm=llm, tools=[calculate, search])
 
-    raise MaxIterationsError()
+# 推理
+result = agent.run("太阳光到地球要多久？")
+print(result.content)   # 约 8.31 分钟
+print(result.iterations) # 2
+print(result.usage)      # {prompt_tokens: ..., completion_tokens: ...}
+
+# 流式推理
+for event in agent.run_stream("1+1=?"):
+    if event["type"] == "thought_chunk":
+        print(event["text"], end="", flush=True)
 ```
+
+---
 
 ## 特性
 
@@ -115,8 +220,19 @@ def run(self, user_input: str) -> AgentResult:
 |------|------|
 | 🔧 **httpx 直调** | 不套 SDK，展示 HTTP 层和 function calling 协议 |
 | 🎯 **类型反射 Schema** | 从函数签名自动推断 JSON Schema |
-| 🛡️ **异常安全** | 工具调用出错返回错误信息而非崩溃 |
-| 📋 **完整 Trace** | thought → action → observation 轨迹，可审计可调试 |
+| 🛡️ **异常安全** | 工具出错返回错误信息，不崩溃 |
+| 📋 **完整 Trace** | Thought → Action → Observation 全记录 |
 | ⚡ **流式输出** | SSE 逐字吐出，打字机效果 |
-| ⚔️ **多 Agent 辩论** | Solver·Critic·Judge 三方辩论，共享上下文 |
-| 📊 **可视化导出** | 一键导出交互式 HTML 报告，浏览器即开即用 |
+| ⚔️ **多 Agent 辩论** | Solver·Critic·Judge 三方互搏 |
+| 📊 **可视化导出** | 一键 HTML，浏览器即开即用 |
+| 🏷️ **钩子系统** | on_tool_call / on_final 可扩展 |
+
+---
+
+## 测试
+
+```bash
+pytest tests/ -v          # 35 tests
+```
+
+覆盖：LLM 响应解析、Agent ReAct 循环、工具注册/Schema 生成、记忆系统。

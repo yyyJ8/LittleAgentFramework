@@ -160,30 +160,22 @@ class Agent:
                         "content": obs,
                     })
 
-            # 情况 2：文本回复 → Final Answer
+            # 情况 2：文本回复（无 tool call）→ 最终答案，直接结束
             if response.content and not response.tool_calls:
-                # 检查 Final Answer 标记
                 content = response.content
-                if "[FINAL]" in content or iteration == self.max_iterations - 1:
-                    clean_content = content.replace("[FINAL]", "").replace("Final Answer:", "").strip()
-                    trace.append({
-                        "iteration": iteration,
-                        "thought": content,
-                        "final_answer": clean_content,
-                    })
-                    self._call_hook("on_final", trace[-1])
-                    return AgentResult(
-                        content=clean_content,
-                        trace=trace,
-                        usage=total_usage,
-                        iterations=iteration + 1,
-                    )
-
-                # 没有 Final Answer 标记但有内容→可能是 Thought，继续循环
-                # 有 tool_calls 时 content 也会被带上的，如 "Thought: 我先计算...\nAction: calculate"
-                if iteration < self.max_iterations - 1:
-                    messages.append({"role": "assistant", "content": content})
-                    continue
+                clean_content = content.replace("[FINAL]", "").replace("Final Answer:", "").replace("最终答案：", "").replace("最终答案:", "").strip()
+                trace.append({
+                    "iteration": iteration,
+                    "thought": content,
+                    "final_answer": clean_content,
+                })
+                self._call_hook("on_final", trace[-1])
+                return AgentResult(
+                    content=clean_content,
+                    trace=trace,
+                    usage=total_usage,
+                    iterations=iteration + 1,
+                )
 
             # 情况 3：response 既无 content 也无 tool_calls（极少数情况）
             if not response.content and not response.tool_calls:
@@ -225,6 +217,7 @@ class Agent:
                     thought_parts.append(chunk.content)
                     yield {"type": "thought_chunk", "text": chunk.content}
 
+                # 初始化 tool call 缓冲区
                 if chunk.tool_call_id:
                     idx = 0  # 简化：同一轮只有一个 tool call
                     if idx not in tool_calls_buffer:
@@ -233,9 +226,12 @@ class Agent:
                             "name": chunk.tool_name,
                             "arguments": "",
                         }
-                    if chunk.tool_name:
-                        tool_calls_buffer[idx]["name"] = chunk.tool_name
-                    tool_calls_buffer[idx]["arguments"] += chunk.tool_args
+                # 补充 name 和 arguments（可能来自后续 chunk）
+                if chunk.tool_call_id or chunk.tool_args:
+                    if 0 in tool_calls_buffer:
+                        if chunk.tool_name:
+                            tool_calls_buffer[0]["name"] = chunk.tool_name
+                        tool_calls_buffer[0]["arguments"] += chunk.tool_args
 
                 if chunk.usage:
                     self._accumulate_usage(total_usage, chunk.usage)
@@ -296,29 +292,24 @@ class Agent:
                     })
                 continue
 
-            # 情况 2：文本回复 → 最终答案
+            # 情况 2：文本回复（无 tool call）→ 最终答案，直接结束
             if thought:
-                if "[FINAL]" in thought or iteration == self.max_iterations - 1:
-                    clean = thought.replace("[FINAL]", "").replace("Final Answer:", "").strip()
-                    yield {"type": "final_answer", "text": clean}
-                    trace.append({
-                        "iteration": iteration,
-                        "thought": thought,
-                        "final_answer": clean,
-                    })
-                    self._call_hook("on_final", trace[-1])
-                    yield {
-                        "type": "done",
-                        "content": clean,
-                        "trace": trace,
-                        "usage": total_usage,
-                        "iterations": iteration + 1,
-                    }
-                    return
-
-                if iteration < self.max_iterations - 1:
-                    messages.append({"role": "assistant", "content": thought})
-                    continue
+                clean = thought.replace("[FINAL]", "").replace("Final Answer:", "").replace("最终答案：", "").replace("最终答案:", "").strip()
+                yield {"type": "final_answer", "text": clean}
+                trace.append({
+                    "iteration": iteration,
+                    "thought": thought,
+                    "final_answer": clean,
+                })
+                self._call_hook("on_final", trace[-1])
+                yield {
+                    "type": "done",
+                    "content": clean,
+                    "trace": trace,
+                    "usage": total_usage,
+                    "iterations": iteration + 1,
+                }
+                return
 
             if not thought:
                 messages.append({

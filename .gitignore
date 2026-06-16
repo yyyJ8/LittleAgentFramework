@@ -28,6 +28,9 @@ env/
 .DS_Store
 Thumbs.db
 
+# Generated outputs
+output/
+
 # Test outputs
 .pytest_cache/
 htmlcov/

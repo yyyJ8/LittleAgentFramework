@@ -2,8 +2,8 @@
 Trace 导出 Demo — 运行推理并生成可交互的 HTML 报告。
 
 运行:
-    python demo/export_demo.py          → 生成 trace_output.html
-    python demo/export_demo.py debate   → 生成 debate_output.html
+    python demo/export_demo.py          → 生成 output/trace.html
+    python demo/export_demo.py debate   → 生成 output/debate.html
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def run_trace_export():
     question = "光从太阳到地球需要多长时间？"
     print(f"🤖 运行 Agent: {question}")
     result = agent.run(question)
-    path = os.path.join(os.path.dirname(__file__), "..", "trace_output.html")
+    path = os.path.join(os.path.dirname(__file__), "..", "output", "trace.html")
     export_trace(result, path, question=question, title="ReAct Agent Trace")
     print(f"✅ 导出到: {os.path.abspath(path)}")
 
@@ -71,7 +71,7 @@ def run_debate_export():
     question = "地球绕太阳公转的线速度是多少？提示：轨道近似圆形"
     print(f"⚔️ 运行 Debate: {question}")
     result = debate.run(question)
-    path = os.path.join(os.path.dirname(__file__), "..", "debate_output.html")
+    path = os.path.join(os.path.dirname(__file__), "..", "output", "debate.html")
     export_debate(result, path, question=question, title="Multi-Agent Debate")
     print(f"✅ 导出到: {os.path.abspath(path)}")
 
